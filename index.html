@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FastAPI Group Chat</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- AUTH SCREEN -->
+<div id="auth" class="auth-container">
+    <form class="auth-box" onsubmit="return false;">
+        <h2>Login / Register</h2>
+
+        <input id="authUser" placeholder="Username" autocomplete="username">
+        <input id="authPass" type="password" placeholder="Password" autocomplete="current-password">
+
+        <div class="auth-buttons">
+            <button type="button" onclick="register()">Register</button>
+            <button type="button" onclick="login()">Login</button>
+        </div>
+
+        <p id="authStatus">Not logged in</p>
+    </form>
+</div>
+
+<!-- CHAT APP -->
+<div id="app" class="chat-container hidden">
+
+    <div class="sidebar">
+        <h3>Online Users</h3>
+        <div id="users"></div>
+    </div>
+
+    <div class="main">
+
+        <div class="top">
+            <input type="text" id="group" placeholder="Group ID">
+            <button onclick="connectWS()">Join</button>
+        </div>
+
+        <div class="messages" id="messages"></div>
+
+        <div class="typing" id="typing"></div>
+
+        <div class="bottom">
+            <input type="text" id="messageInput" placeholder="Type message..." disabled>
+            <button onclick="sendMessage()" disabled id="sendBtn">Send</button>
+        </div>
+
+    </div>
+
+</div>
+
+<script>
+let ws = null;
+let currentUser = null;
+
+const messages = document.getElementById("messages");
+const typingDiv = document.getElementById("typing");
+const usersDiv = document.getElementById("users");
+
+function setChatEnabled(state) {
+    document.getElementById("messageInput").disabled = !state;
+    document.getElementById("sendBtn").disabled = !state;
+}
+
+// ---------------- PERSIST LOGIN ----------------
+function initAuthState() {
+    const token = localStorage.getItem("access");
+    const user = localStorage.getItem("user");
+    // console.log(token,user)
+    if (token && user) {
+        currentUser = user.username;
+        showChat();
+    }
+}
+
+function showChat() {
+    document.getElementById("auth").classList.add("hidden");
+    document.getElementById("app").classList.remove("hidden");
+    setChatEnabled(true);
+}
+
+function logout() {
+    localStorage.clear();
+    location.reload();
+}
+
+// ---------------- AUTH ----------------
+
+async function register() {
+    const username = document.getElementById("authUser").value;
+    const password = document.getElementById("authPass").value;
+
+    const res = await fetch("/auth/register", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({username, password})
+    });
+
+    const data = await res.json();
+    document.getElementById("authStatus").innerText =
+        data.message || "Registered";
+}
+
+async function login() {
+    const username = document.getElementById("authUser").value;
+    const password = document.getElementById("authPass").value;
+
+    const res = await fetch("/auth/login", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({username, password})
+    });
+
+    const data = await res.json();
+
+    if (!data.access_token) {
+        document.getElementById("authStatus").innerText = "Login failed";
+        return;
+    }
+
+    localStorage.setItem("access", data.access_token);
+    localStorage.setItem("refresh", data.refresh_token);
+    localStorage.setItem("user", username);
+
+    currentUser = username;
+
+    showChat();
+}
+
+// ---------------- WS ----------------
+
+function connectWS() {
+    const group = document.getElementById("group").value.trim();
+    const token = localStorage.getItem("access");
+
+    if (!token) return alert("Login first");
+    if (!group) return alert("Enter group id");
+
+    const protocol = location.protocol === "https:" ? "wss" : "ws";
+
+    ws = new WebSocket(
+        `${protocol}://${location.host}/ws/${group}?token=${token}`
+    );
+
+    ws.onmessage = (event) => {
+        handleMessage(JSON.parse(event.data));
+    };
+}
+
+// ---------------- CHAT ----------------
+
+function sendMessage() {
+    const input = document.getElementById("messageInput");
+    const text = input.value.trim();
+
+    if (!ws || !text) return;
+
+    ws.send(JSON.stringify({
+        type: "chat",
+        message: text
+    }));
+
+    input.value = "";
+}
+
+// ---------------- UI ----------------
+
+function handleMessage(data) {
+
+    if (data.type === "chat" || data.type === "system") {
+        const wrapper = document.createElement("div");
+        // console.log(data)
+        const isSelf = data.user === currentUser;
+
+        wrapper.className = `msg ${isSelf ? "self" : ""} ${data.type === "system" ? "system" : ""}`;
+
+        wrapper.innerHTML = `
+            <div class="meta">${data.user || "system"} • ${data.time || ""}</div>
+            <div>${data.message}</div>
+        `;
+
+        messages.appendChild(wrapper);
+        messages.scrollTop = messages.scrollHeight;
+    }
+
+    if (data.type === "typing") {
+        if (data.user.username === currentUser) return;
+        typingDiv.innerText = `${data.user} is typing...`;
+
+        setTimeout(() => typingDiv.innerText = "", 1000);
+    }
+
+    if (data.type === "online_users") {
+
+    usersDiv.innerHTML = "";
+
+    // console.log(data.users);
+
+    data.users.forEach(u => {
+
+        const div = document.createElement("div");
+
+        div.className = "user";
+
+        // ✅ show username
+        div.innerText = u.username;
+
+        usersDiv.appendChild(div);
+    });
+}
+}
+
+// ENTER KEY
+document.getElementById("messageInput")
+.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") sendMessage();
+});
+
+// TYPING
+let isTyping = false;
+
+document.getElementById("messageInput")
+.addEventListener("input", () => {
+    if (!ws || isTyping) return;
+
+    isTyping = true;
+
+    ws.send(JSON.stringify({ type: "typing" }));
+
+    setTimeout(() => isTyping = false, 1000);
+});
+
+// INIT
+initAuthState();
+</script>
+
+</body>
+</html>

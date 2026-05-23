@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  fastapi:
+    build: .
+    container_name: fastapi_app
+
+    ports:
+      - "8000:8000"
+
+    depends_on:
+      - redis
+
+    restart: unless-stopped
+
+    volumes:
+      - .:/app
+
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:////app/chat.db
+      - REDIS_URL=redis://redis:6379
+
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app
+
+  redis:
+    image: redis:7
+    container_name: redis-server
+
+    restart: unless-stopped
+
+    ports:
+      - "6379:6379"
