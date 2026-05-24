@@ -2,23 +2,30 @@ from fastapi import (
                 FastAPI, 
                 WebSocket, 
                 WebSocketDisconnect,
-                Query,
-                Depends,
-                HTTPException,
+                Query
                 )
 from datetime import datetime
 from dependencies import db_session
-from auth.router import router as auth_router
-from admin.router import router as admin_router
-from auth.jwt_auth import verify_access_token
-from auth.service import get_current_user
 import json
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 import asyncio
+
+# Routers
+from auth.router import router as auth_router
+from admin.router import router as admin_router
+from chat.router import router as chat_router
+
+# Services
+from auth.service import get_current_user_ws
+
+# Redis client
 from redis_client import r
+
+# DB and models
 from db import init_db
-from models import Message
+from sqlalchemy import select
+from models import Message, ConversationParticipants
 
 
 app = FastAPI()
@@ -31,32 +38,53 @@ async def get():
         html = f.read()
     return HTMLResponse(html)
 
+
+# Connection manager for actual ws logic connection
 from manager import ConnectionManager
 
 manager = ConnectionManager()
 
+# Channelsa used in redis to listen and publish msgs
 def channel(group_id: str):
     return f"group:{group_id}"
 
+# Startup function
 @app.on_event("startup")
 async def startup():
     await init_db()
     asyncio.create_task(redis_listener())
 
+
 app.include_router(auth_router)
 app.include_router(admin_router)
+app.include_router(chat_router)
 
+# WS route
 @app.websocket('/ws/{group_id}')
 async def groupChat(
     ws: WebSocket,
-    group_id: str,
+    group_id: str | None,
     db: db_session,
     token: str = Query(...)
 ):
-    user = await get_current_user(db, token)
-
+    user = await get_current_user_ws(db, token)
+    if not user:
+        await ws.close(code=1008)
+        return
     user_id = user.id
     username = user.username
+    stmt = select(ConversationParticipants).where(
+        ConversationParticipants.conversation_id == int(group_id),
+        ConversationParticipants.user_id == user_id
+    )
+
+    result = await db.execute(stmt)
+
+    participant = result.scalar_one_or_none()
+
+    if not participant:
+        await ws.close(code=1008)
+        return
 
     await manager.connect(group_id, user_id,username, ws)
 
@@ -79,7 +107,7 @@ async def groupChat(
                 db.add(Message(
                     conversation_id=int(group_id),
                     sender_id=user_id,
-                    message=message   # ✅ store raw text, not dict
+                    message=message
                 ))
 
                 await db.commit()
@@ -103,6 +131,7 @@ async def groupChat(
 
     except WebSocketDisconnect:
         await manager.disconnect(group_id, user_id, ws)
+    
 async def redis_listener():
     pubsub = r.pubsub()
     await pubsub.psubscribe("group:*")

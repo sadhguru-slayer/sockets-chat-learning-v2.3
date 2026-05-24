@@ -28,25 +28,67 @@
 <!-- CHAT APP -->
 <div id="app" class="chat-container hidden">
 
+    <!-- LEFT SIDEBAR -->
     <div class="sidebar">
-        <h3>Online Users</h3>
-        <div id="users"></div>
-    </div>
 
-    <div class="main">
+        <h3>Groups</h3>
 
-        <div class="top">
-            <input type="text" id="group" placeholder="Group ID">
-            <button onclick="connectWS()">Join</button>
+        <div id="groupList"></div>
+
+        <button onclick="toggleGroupActions()">
+            + Groups
+        </button>
+
+        <div id="groupActions" class="hidden">
+
+            <input id="groupName" placeholder="New group name">
+            <button onclick="createGroup()">Create</button>
+
+            <input id="joinGroupId" placeholder="Group ID">
+            <button onclick="joinGroup()">Join</button>
+
         </div>
 
-        <div class="messages" id="messages"></div>
+    </div>
 
-        <div class="typing" id="typing"></div>
+    <!-- MAIN CHAT -->
+    <div class="main">
 
-        <div class="bottom">
-            <input type="text" id="messageInput" placeholder="Type message..." disabled>
-            <button onclick="sendMessage()" disabled id="sendBtn">Send</button>
+    <!-- ✅ CHAT HEADER (ADD THIS) -->
+<div class="chat-header">
+    <div class="chat-title" id="groupTitle">Select a group</div>
+
+    <div class="header-actions">
+        <button class="users-toggle" onclick="toggleUsersPanel()">
+            ☰ Users
+        </button>
+
+        <button id="leaveBtn" onclick="leaveGroup()" style="display:none;">
+            Leave
+        </button>
+    </div>
+</div>
+    <div id="messages"></div>
+
+    <div id="typing"></div>
+
+    <div class="bottom">
+        <input id="messageInput" disabled>
+        <button id="sendBtn" onclick="sendMessage()">Send</button>
+    </div>
+
+</div>
+
+    <!-- RIGHT PANEL -->
+    <div class="rightbar">
+
+        <button onclick="toggleUsersPanel()">Users</button>
+
+        <div id="usersPanel" class="hidden">
+
+            <h4>All Members</h4>
+            <div id="allUsers"></div>
+
         </div>
 
     </div>
@@ -54,12 +96,15 @@
 </div>
 
 <script>
+    let currentGroup = null;
 let ws = null;
 let currentUser = null;
+let groups = [];
 
 const messages = document.getElementById("messages");
 const typingDiv = document.getElementById("typing");
-const usersDiv = document.getElementById("users");
+const onlineUsersDiv = document.getElementById("onlineUsers");
+const allUsersDiv = document.getElementById("allUsers");
 
 function setChatEnabled(state) {
     document.getElementById("messageInput").disabled = !state;
@@ -72,9 +117,21 @@ function initAuthState() {
     const user = localStorage.getItem("user");
     // console.log(token,user)
     if (token && user) {
-        currentUser = user.username;
+        currentUser = user;
+        updateHeader();
         showChat();
+        loadGroups();   
     }
+
+    const params = new URLSearchParams(window.location.search);
+
+const groupId = params.get("group");
+
+if (groupId) {
+    currentGroup = groupId;
+
+    connectWS(groupId);
+}
 }
 
 function showChat() {
@@ -133,24 +190,221 @@ async function login() {
 
 // ---------------- WS ----------------
 
-function connectWS() {
-    const group = document.getElementById("group").value.trim();
+function updateHeader() {
+    const title = document.getElementById("groupTitle");
+    const leaveBtn = document.getElementById("leaveBtn");
+
+    if (!currentGroup) {
+        title.innerText = "Select a group";
+        leaveBtn.style.display = "none";
+        return;
+    }
+
+    title.innerText = `Group ${currentGroup}`;
+    leaveBtn.style.display = "inline-block";
+}
+
+async function loadGroups() {
+
+    const token = localStorage.getItem("access");
+
+    const res = await fetch("/chat/groups", {
+        headers: {
+            "Authorization": `Bearer ${token}`
+        }
+    });
+
+
+
+    groups = await res.json();
+
+    renderGroups();
+}
+
+function renderGroups() {
+
+    const el = document.getElementById("groupList");
+    el.innerHTML = "";
+
+    groups.forEach(g => {
+
+        const div = document.createElement("div");
+        div.className = "group";
+
+        div.innerText = g.name;
+
+        div.onclick = () => {
+            connectWS(g.id);
+        };
+
+        el.appendChild(div);
+    });
+}
+
+function toggleGroupActions() {
+
+    document
+        .getElementById("groupActions")
+        .classList
+        .toggle("hidden");
+}
+
+function toggleUsersPanel() {
+
+    document
+        .getElementById("usersPanel")
+        .classList
+        .toggle("hidden");
+}
+
+async function loadUsers(groupId) {
+    const res = await fetch(`/chat/groups/${groupId}/users`, {
+        headers: {
+            "Authorization": `Bearer ${localStorage.getItem("access")}`
+        }
+    });
+
+    const data = await res.json();
+    renderUsers(data);
+}
+
+async function leaveGroup() {
+
+    if (!currentGroup) {
+        return;
+    }
+
+    const token = localStorage.getItem("access");
+
+    const res = await fetch(
+        `/chat/groups/${currentGroup}/leave`,
+        {
+            method: "DELETE",
+            headers: {
+                "Authorization": `Bearer ${token}`
+            }
+        }
+    );
+
+    const data = await res.json();
+
+    if (!res.ok) {
+        return alert(data.detail || "Failed");
+    }
+
+    if (ws) {
+        ws.close();
+    }
+
+    currentGroup = null;
+    updateHeader();
+    messages.innerHTML = "";
+
+    alert("Left group");
+}
+
+async function createGroup() {
+
+    const token = localStorage.getItem("access");
+
+    const name = document
+        .getElementById("groupName")
+        .value
+        .trim();
+
+    if (!name) {
+        return alert("Enter group name");
+    }
+
+    const res = await fetch("/chat/groups", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({
+            name,
+            participants: []
+        })
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+        return alert(data.detail || "Failed");
+    }
+
+    currentGroup = data.group_id;
+updateHeader();
+    connectWS(currentGroup);
+}
+
+async function joinGroup() {
+
+    const token = localStorage.getItem("access");
+
+    const groupId = document
+        .getElementById("joinGroupId")
+        .value
+        .trim();
+
+    if (!groupId) {
+        return alert("Enter group id");
+    }
+
+    const res = await fetch("/chat/groups/join", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({
+            conversation_id: Number(groupId)
+        })
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+        return alert(data.detail || "Join failed");
+    }
+
+    currentGroup = groupId;
+
+    connectWS(currentGroup);
+}
+
+function connectWS(groupId) {
+
+    currentGroup = groupId;   // ✅ IMPORTANT FIX
+    updateHeader();
+
     const token = localStorage.getItem("access");
 
     if (!token) return alert("Login first");
-    if (!group) return alert("Enter group id");
 
     const protocol = location.protocol === "https:" ? "wss" : "ws";
 
     ws = new WebSocket(
-        `${protocol}://${location.host}/ws/${group}?token=${token}`
+        `${protocol}://${location.host}/ws/${groupId}?token=${token}`
     );
+
+    ws.onopen = () => {
+        setChatEnabled(true);
+        loadMessages(groupId);
+        loadUsers(groupId); // ✅ also load users here
+    };
 
     ws.onmessage = (event) => {
         handleMessage(JSON.parse(event.data));
     };
-}
 
+    history.replaceState(null, "", `/?group=${groupId}`);
+
+    ws.onclose = () => {
+        setChatEnabled(false);
+    };
+}
 // ---------------- CHAT ----------------
 
 function sendMessage() {
@@ -169,12 +423,54 @@ function sendMessage() {
 
 // ---------------- UI ----------------
 
+async function loadMessages(groupId) {
+
+    const token = localStorage.getItem("access");
+
+    const res = await fetch(
+        `/chat/groups/${groupId}/messages`,
+        {
+            headers: {
+                "Authorization": `Bearer ${token}`
+            }
+        }
+    );
+
+    const data = await res.json();
+
+    messages.innerHTML = "";
+
+    data.forEach(msg => {
+        handleMessage(msg);
+    });
+}
+
+function renderUsers(data) {
+    onlineUsersDiv.innerHTML = "";
+    allUsersDiv.innerHTML = "";
+
+    data.online.forEach(u => {
+        const div = document.createElement("div");
+        div.className = "online";
+        div.innerText = "🟢 " + u.username;
+        onlineUsersDiv.appendChild(div);
+    });
+
+    data.all.forEach(u => {
+        const div = document.createElement("div");
+        div.className = "all";
+        div.innerText = "⚪ " + u.username;
+        allUsersDiv.appendChild(div);
+    });
+}
+
 function handleMessage(data) {
 
     if (data.type === "chat" || data.type === "system") {
         const wrapper = document.createElement("div");
-        // console.log(data)
+        //console.log(data,currentUser)
         const isSelf = data.user === currentUser;
+
 
         wrapper.className = `msg ${isSelf ? "self" : ""} ${data.type === "system" ? "system" : ""}`;
 
@@ -187,8 +483,10 @@ function handleMessage(data) {
         messages.scrollTop = messages.scrollHeight;
     }
 
+
     if (data.type === "typing") {
-        if (data.user.username === currentUser) return;
+        //console.log(data.user)
+        if (data.user === currentUser) return;
         typingDiv.innerText = `${data.user} is typing...`;
 
         setTimeout(() => typingDiv.innerText = "", 1000);
@@ -196,20 +494,13 @@ function handleMessage(data) {
 
     if (data.type === "online_users") {
 
-    usersDiv.innerHTML = "";
-
-    // console.log(data.users);
+    onlineUsersDiv.innerHTML = "";
 
     data.users.forEach(u => {
-
         const div = document.createElement("div");
-
         div.className = "user";
-
-        // ✅ show username
         div.innerText = u.username;
-
-        usersDiv.appendChild(div);
+        onlineUsersDiv.appendChild(div);
     });
 }
 }

@@ -8,7 +8,7 @@ from redis_client import r
 class ConnectionManager:
     def __init__(self):
         # 🔥 CHANGED: using username as key for readability in frontend
-        # group_id -> { username -> websocket }
+        # group_id -> { user_id -> {username, ws} }
         self.groups: dict[str, dict[int, dict]] = defaultdict(dict)
 
     def _now(self):
@@ -53,30 +53,17 @@ class ConnectionManager:
 
     async def disconnect(self, group_id: str, user_id: int, ws: WebSocket):
 
-        # 🔥 CHANGED: using username instead of client_id for clarity
         if group_id not in self.groups:
             return
         
-        username = user_id
 
         if user_id in self.groups[group_id]:
-            username = self.groups[group_id][user_id]["username"]
             del self.groups[group_id][user_id]
-        else:
-            return
-        leave_msg = {
-            "type": "system",
-            "event": "leave",
-            "user": username,
-            "time": self._now(),
-            "message": f"{username} left {group_id}"
-        }
-
+        
         # cleanup empty group
         if not self.groups[group_id]:
             del self.groups[group_id]
 
-        await self.broadcast(group_id, leave_msg)
         await self.send_online_users(group_id)
 
     async def send_personal_message(self, ws: WebSocket, data: dict):
