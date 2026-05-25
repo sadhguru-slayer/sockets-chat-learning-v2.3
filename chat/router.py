@@ -9,12 +9,67 @@ from models import (
 )
 from dependencies import db_session
 from auth.service import get_current_user, oauth2_scheme
-from .schemas import JoinGroupSchema, CreateGroupSchema
+from .schemas import JoinGroupSchema, CreateGroupSchema,DMRequest
 from manager import ConnectionManager
+from redis_client import r
+import json
 
 manager = ConnectionManager()
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+@router.get("/dm")
+async def initiate_direct_message(
+    db:db_session,
+    payload: DMRequest,
+    token:str=Depends(oauth2_scheme),
+):
+    token_user = await get_current_user(db, token)
+    if not token_user:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    user_ids = payload.user_ids
+    
+    if len(user_ids) != 1:
+        raise HTTPException(
+            status_code=400,
+            detail="You must provide exactly 1 other user"
+        )
+    
+    all_users = sorted([token_user.id, user_ids[0]])
+    stmt = (
+        select(Conversation)
+        .join(ConversationParticipants)
+        .where(Conversation.is_group == False)
+        .group_by(Conversation.id)
+        )
+    result = await db.execute(stmt)
+    conversations = result.scalars().all()
+    
+    for c in conversations:
+        participant_ids = sorted([p.user_id for p in c.participants])
+    
+        if participant_ids == all_users:
+            return {
+                "message": "DM already exists",
+                "conversation_id": c.id
+            }
+    conversation = Conversation(
+        is_group=False,
+        name="DM"
+    )
+    db.add(conversation)
+    await db.flush()
+    for uid in all_users:
+        db.add(
+            ConversationParticipants(
+                conversation_id=conversation.id,
+                user_id=uid
+            )
+        )
+    await db.commit()
+    return {"message":"Private chat created"}
+
 
 @router.post('/groups')
 async def create_group(
@@ -39,6 +94,13 @@ async def create_group(
     )
     db.add(creator)
 
+    db.add(Message(
+                    conversation_id=int(conversation.id),
+                    sender_id=token_user.id,
+                    type="system",
+                    message=f"{token_user.username} joined group"
+    ))
+    
     for user_id in payload.participants:
         if user_id == token_user.id:
             continue
@@ -54,6 +116,13 @@ async def create_group(
                 user_id=user_id
             )
         )
+
+        db.add(Message(
+                    conversation_id=int(conversation.id),
+                    sender_id=token_user.id,
+                    type="system",
+                    message=f"{token_user.username} joined group"
+            ))
 
     await db.commit()
 
@@ -72,10 +141,11 @@ async def join_group(
     if not token_user:
         raise HTTPException(status_code=401, detail="Invalid token")
     conversation = await db.get(Conversation,payload.conversation_id)
-
+    print(token_user,"User----")
     if not conversation:
         raise HTTPException(status_code=404,detail="Group not found")
     
+    print(conversation,"Coversation----")
     is_users_joined = select(ConversationParticipants).where(
         ConversationParticipants.conversation_id == payload.conversation_id,
         ConversationParticipants.user_id == token_user.id
@@ -84,12 +154,11 @@ async def join_group(
     result = await db.execute(is_users_joined)
 
     already = result.scalar_one_or_none()
-
+    print(already)
     if already:
         return {"message":"User already joined"}
     
 
-    await db.commit()
     db.add(
         ConversationParticipants(
             conversation_id = conversation.id,
@@ -97,12 +166,26 @@ async def join_group(
         )
     )
 
-    await manager.broadcast(str(conversation.id), {
+    msg = {
         "type": "system",
         "event": "join",
         "user": token_user.username,
         "message": f"{token_user.username} joined group"
-    })
+    }
+
+    db.add(Message(
+                    conversation_id=int(conversation.id),
+                    sender_id=token_user.id,
+                    type="system",
+                    message=f"{token_user.username} joined group"
+                ))
+    await db.commit()
+    
+
+    await r.publish(
+        f"group:{conversation.id}",
+        json.dumps(msg)
+    )
 
     return {"message":"Joined group"}
 
@@ -131,17 +214,31 @@ async def leave_group(
 
     await db.delete(participant)
 
-    await db.commit()
-
-    await manager.broadcast(str(group_id), {
+    msg = {
         "type": "system",
         "event": "leave",
         "user": token_user.username,
         "message": f"{token_user.username} left group"
-    })
+    }
+
+    db.add(Message(
+                    conversation_id=int(group_id),
+                    sender_id=token_user.id,
+                    type="system",
+                    message=f"{token_user.username} left group"
+                ))
+    await db.commit()
+    
+
+    await r.publish(
+        f"group:{group_id}",
+        json.dumps(msg)
+    )
     return {
         "message": "Left group"
     }
+
+
 
 @router.get("/groups/{group_id}/messages")
 async def get_messages(
@@ -183,7 +280,7 @@ async def get_messages(
             "user": m.sender.username,
             "message": m.message,
             "time": m.timestamp.strftime("%H:%M:%S"),
-            "type": "chat"
+            "type": m.type
         }
         for m in messages
     ]
@@ -229,7 +326,6 @@ async def get_user_groups(
     if not token_user:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    print("Token User:-----",token_user)
     stmt = (
         select(Conversation)
         .join(ConversationParticipants)
@@ -241,7 +337,6 @@ async def get_user_groups(
     result = await db.execute(stmt)
 
     groups = result.scalars().all()
-    print("Groups:------",groups)
     return [
         {
             "id": g.id,

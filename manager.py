@@ -39,16 +39,6 @@ class ConnectionManager:
         for msg in history:
             await ws.send_json(json.loads(msg))
 
-        # system join message
-        join_msg = {
-            "type": "system",
-            "event": "join",
-            "user": username,
-            "time": self._now(),
-            "message": f"{username} joined {group_id}"
-        }
-
-        await self.broadcast(group_id, join_msg)
         await self.send_online_users(group_id)
 
     async def disconnect(self, group_id: str, user_id: int, ws: WebSocket):

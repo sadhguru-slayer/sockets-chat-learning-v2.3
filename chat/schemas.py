@@ -9,3 +9,6 @@ class CreateGroupSchema(BaseModel):
 
 class JoinGroupSchema(BaseModel):
     conversation_id: int
+
+class DMRequest(BaseModel):
+    user_ids: List[int]

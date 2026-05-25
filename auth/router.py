@@ -46,8 +46,11 @@ async def refresh_token(refresh_token: str):
         "access_token": new_access
     }
 
+from fastapi.security import OAuth2PasswordRequestForm
+from typing import Annotated
+
 @router.post("/login", response_model=TokenResponse)
-async def login(data: LoginRequest,db:db_session):
+async def login(data: Annotated[OAuth2PasswordRequestForm,Depends()],db:db_session):
     result = await db.execute(
         select(User).where(User.username == data.username)
     )

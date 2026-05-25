@@ -107,6 +107,7 @@ async def groupChat(
                 db.add(Message(
                     conversation_id=int(group_id),
                     sender_id=user_id,
+                    type="chat",
                     message=message
                 ))
 

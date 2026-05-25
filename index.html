@@ -166,10 +166,16 @@ async function login() {
     const username = document.getElementById("authUser").value;
     const password = document.getElementById("authPass").value;
 
+    const formData = new URLSearchParams();
+    formData.append("username", username);
+    formData.append("password", password);
+
     const res = await fetch("/auth/login", {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({username, password})
+        headers: {
+            "Content-Type": "application/x-www-form-urlencoded"
+        },
+        body: formData
     });
 
     const data = await res.json();
@@ -466,16 +472,17 @@ function renderUsers(data) {
 
 function handleMessage(data) {
 
-    if (data.type === "chat" || data.type === "system") {
+    // Handle system messages separately
+    console.log("TYPE:",data)
+    if (data.type === "system") {
+        console.log("Inside SYSTEM")
+
         const wrapper = document.createElement("div");
-        //console.log(data,currentUser)
-        const isSelf = data.user === currentUser;
 
-
-        wrapper.className = `msg ${isSelf ? "self" : ""} ${data.type === "system" ? "system" : ""}`;
+        wrapper.className = "msg system";
 
         wrapper.innerHTML = `
-            <div class="meta">${data.user || "system"} • ${data.time || ""}</div>
+            <div class="meta">system • ${data.time || ""}</div>
             <div>${data.message}</div>
         `;
 
@@ -483,26 +490,50 @@ function handleMessage(data) {
         messages.scrollTop = messages.scrollHeight;
     }
 
+    // Handle normal chat messages
+    else if (data.type === "chat") {
 
-    if (data.type === "typing") {
-        //console.log(data.user)
-        if (data.user === currentUser) return;
-        typingDiv.innerText = `${data.user} is typing...`;
+        const wrapper = document.createElement("div");
 
-        setTimeout(() => typingDiv.innerText = "", 1000);
+        const isSelf = data.user === currentUser;
+
+        wrapper.className = `msg ${isSelf ? "self" : ""}`;
+
+        wrapper.innerHTML = `
+            <div class="meta">${data.user} • ${data.time || ""}</div>
+            <div>${data.message}</div>
+        `;
+
+        messages.appendChild(wrapper);
+        messages.scrollTop = messages.scrollHeight;
     }
 
+    // Typing indicator
+    if (data.type === "typing") {
+
+        if (data.user === currentUser) return;
+
+        typingDiv.innerText = `${data.user} is typing...`;
+
+        setTimeout(() => {
+            typingDiv.innerText = "";
+        }, 1000);
+    }
+
+    // Online users
     if (data.type === "online_users") {
 
-    onlineUsersDiv.innerHTML = "";
+        onlineUsersDiv.innerHTML = "";
 
-    data.users.forEach(u => {
-        const div = document.createElement("div");
-        div.className = "user";
-        div.innerText = u.username;
-        onlineUsersDiv.appendChild(div);
-    });
-}
+        data.users.forEach(u => {
+            const div = document.createElement("div");
+
+            div.className = "user";
+            div.innerText = u.username;
+
+            onlineUsersDiv.appendChild(div);
+        });
+    }
 }
 
 // ENTER KEY

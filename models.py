@@ -130,6 +130,10 @@ class Message(Base):
         index=True
     )
 
+    type: Mapped[str] = mapped_column(
+        default="chat"
+    )
+
     message: Mapped[str] = mapped_column(Text)
 
     timestamp: Mapped[datetime] = mapped_column(

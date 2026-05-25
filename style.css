@@ -186,7 +186,7 @@ body {
 /* typing indicator */
 #typing {
     height: 20px;
-    font-size: 12px;
+    font-size: 20px;
     color: #555;
     padding-left: 15px;
 }
