@@ -130,6 +130,8 @@ class Message(Base):
         index=True
     )
 
+    
+
     type: Mapped[str] = mapped_column(
         default="chat"
     )

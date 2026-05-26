@@ -45,8 +45,8 @@ from manager import ConnectionManager
 manager = ConnectionManager()
 
 # Channelsa used in redis to listen and publish msgs
-def channel(group_id: str):
-    return f"group:{group_id}"
+def channel(conversation_id: str):
+    return f"group:{conversation_id}"
 
 # Startup function
 @app.on_event("startup")
@@ -60,10 +60,10 @@ app.include_router(admin_router)
 app.include_router(chat_router)
 
 # WS route
-@app.websocket('/ws/{group_id}')
-async def groupChat(
+@app.websocket('/ws/{conversation_id}')
+async def conversation_socket(
     ws: WebSocket,
-    group_id: str | None,
+    conversation_id: str | None,
     db: db_session,
     token: str = Query(...)
 ):
@@ -74,7 +74,7 @@ async def groupChat(
     user_id = user.id
     username = user.username
     stmt = select(ConversationParticipants).where(
-        ConversationParticipants.conversation_id == int(group_id),
+        ConversationParticipants.conversation_id == int(conversation_id),
         ConversationParticipants.user_id == user_id
     )
 
@@ -86,7 +86,7 @@ async def groupChat(
         await ws.close(code=1008)
         return
 
-    await manager.connect(group_id, user_id,username, ws)
+    await manager.connect(conversation_id, user_id,username, ws)
 
     try:
         while True:
@@ -99,13 +99,13 @@ async def groupChat(
                 chat_message = {
                     "type": "chat",
                     "user": username,
-                    "group": group_id,
+                    "group": conversation_id,
                     "time": datetime.now().strftime("%H:%M:%S"),
                     "message": message
                 }
 
                 db.add(Message(
-                    conversation_id=int(group_id),
+                    conversation_id=int(conversation_id),
                     sender_id=user_id,
                     type="chat",
                     message=message
@@ -114,7 +114,7 @@ async def groupChat(
                 await db.commit()
 
                 await r.publish(
-                    f"group:{group_id}",
+                    f"group:{conversation_id}",
                     json.dumps(chat_message)
                 )
 
@@ -122,16 +122,16 @@ async def groupChat(
                 typing_message = {
                     "type": "typing",
                     "user": username,
-                    "group": group_id
+                    "group": conversation_id
                 }
 
                 await r.publish(
-                    f"group:{group_id}",
+                    f"group:{conversation_id}",
                     json.dumps(typing_message)
                 )
 
     except WebSocketDisconnect:
-        await manager.disconnect(group_id, user_id, ws)
+        await manager.disconnect(conversation_id, user_id, ws)
     
 async def redis_listener():
     pubsub = r.pubsub()
@@ -156,10 +156,10 @@ async def redis_listener():
         if isinstance(channel, bytes):
             channel = channel.decode()
 
-        group_id = channel.split(":")[1]
+        conversation_id = channel.split(":")[1]
 
-        if manager.groups.get(group_id):
-            for data_ws in list(manager.groups[group_id].values()):
+        if manager.groups.get(conversation_id):
+            for data_ws in list(manager.groups[conversation_id].values()):
                 try:
                     await data_ws["ws"].send_json(data)
                 except Exception as e:

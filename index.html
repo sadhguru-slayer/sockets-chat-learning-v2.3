@@ -28,28 +28,81 @@
 <!-- CHAT APP -->
 <div id="app" class="chat-container hidden">
 
-    <!-- LEFT SIDEBAR -->
-    <div class="sidebar">
+<!-- LEFT SIDEBAR -->
+<div class="sidebar">
 
-        <h3>Groups</h3>
+    <!-- APP TITLE -->
+    <div class="sidebar-header">
+        <h2>Chats</h2>
 
-        <div id="groupList"></div>
+        <button class="icon-btn" onclick="toggleDmActions()">
+            ＋
+        </button>
+    </div>
 
-        <button onclick="toggleGroupActions()">
-            + Groups
+    <!-- DM ACTIONS -->
+    <div id="dmActions" class="sidebar-actions hidden">
+
+        <input id="dmUserId" placeholder="Enter User ID">
+
+        <button onclick="startDM()">
+            Start Chat
         </button>
 
-        <div id="groupActions" class="hidden">
+    </div>
+
+    <!-- DM LIST -->
+    <div class="sidebar-section">
+
+        <div class="section-title">
+            Direct Messages
+        </div>
+
+        <div id="chatList" class="chat-list">
+            <!-- DM users here -->
+        </div>
+
+    </div>
+
+    <!-- GROUPS -->
+    <div class="sidebar-section">
+
+        <div class="section-header">
+
+            <div class="section-title">
+                Groups
+            </div>
+
+            <button class="small-btn" onclick="toggleGroupActions()">
+                +
+            </button>
+
+        </div>
+
+        <div id="groupList" class="chat-list">
+            <!-- Groups here -->
+        </div>
+
+        <!-- GROUP ACTIONS -->
+        <div id="groupActions" class="sidebar-actions hidden">
 
             <input id="groupName" placeholder="New group name">
-            <button onclick="createGroup()">Create</button>
 
-            <input id="joinGroupId" placeholder="Group ID">
-            <button onclick="joinGroup()">Join</button>
+            <button onclick="createGroup()">
+                Create Group
+            </button>
+
+            <input id="joinGroupId" placeholder="Enter Group ID">
+
+            <button onclick="joinGroup()">
+                Join Group
+            </button>
 
         </div>
 
     </div>
+
+</div>
 
     <!-- MAIN CHAT -->
     <div class="main">
@@ -69,8 +122,7 @@
     </div>
 </div>
     <div id="messages"></div>
-
-    <div id="typing"></div>
+    <div id="typing" class="typing hidden"></div>
 
     <div class="bottom">
         <input id="messageInput" disabled>
@@ -100,6 +152,8 @@
 let ws = null;
 let currentUser = null;
 let groups = [];
+let dms = [];
+let currentChatName = "";
 
 const messages = document.getElementById("messages");
 const typingDiv = document.getElementById("typing");
@@ -120,17 +174,19 @@ function initAuthState() {
         currentUser = user;
         updateHeader();
         showChat();
+        loadDMs();
         loadGroups();   
     }
 
     const params = new URLSearchParams(window.location.search);
 
-const groupId = params.get("group");
+const conversationId = params.get("conversation");
 
-if (groupId) {
-    currentGroup = groupId;
+if (conversationId) {
 
-    connectWS(groupId);
+    currentGroup = conversationId;
+
+    connectWS(conversationId);
 }
 }
 
@@ -196,18 +252,69 @@ async function login() {
 
 // ---------------- WS ----------------
 
+async function startDM() {
+
+    const token = localStorage.getItem("access");
+
+    const userId = document
+        .getElementById("dmUserId")
+        .value
+        .trim();
+
+    if (!userId) {
+        return alert("Enter user id");
+    }
+
+    const res = await fetch("/chat/dm", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({
+            user_ids: [Number(userId)]
+        })
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+        return alert(data.detail || "Failed");
+    }
+
+    await loadDMs();
+
+    connectWS(data.conversation_id);
+}
+
 function updateHeader() {
+
     const title = document.getElementById("groupTitle");
     const leaveBtn = document.getElementById("leaveBtn");
 
     if (!currentGroup) {
-        title.innerText = "Select a group";
+        title.innerText = "Select a chat";
         leaveBtn.style.display = "none";
         return;
     }
 
-    title.innerText = `Group ${currentGroup}`;
+    title.innerText = currentChatName;
+
     leaveBtn.style.display = "inline-block";
+}
+async function loadDMs() {
+
+    const token = localStorage.getItem("access");
+
+    const res = await fetch("/chat/dms", {
+        headers: {
+            "Authorization": `Bearer ${token}`
+        }
+    });
+
+    dms = await res.json();
+
+    renderDMs();
 }
 
 async function loadGroups() {
@@ -227,6 +334,29 @@ async function loadGroups() {
     renderGroups();
 }
 
+function renderDMs() {
+
+    const el = document.getElementById("chatList");
+
+    el.innerHTML = "";
+
+    dms.forEach(dm => {
+
+        const div = document.createElement("div");
+
+        div.className = "group";
+
+        div.innerText = dm.username;
+
+        div.onclick = () => {
+            currentChatName = dm.username;
+            connectWS(dm.conversation_id);
+        };
+
+        el.appendChild(div);
+    });
+}
+
 function renderGroups() {
 
     const el = document.getElementById("groupList");
@@ -240,6 +370,7 @@ function renderGroups() {
         div.innerText = g.name;
 
         div.onclick = () => {
+            currentChatName = g.name;
             connectWS(g.id);
         };
 
@@ -263,8 +394,8 @@ function toggleUsersPanel() {
         .toggle("hidden");
 }
 
-async function loadUsers(groupId) {
-    const res = await fetch(`/chat/groups/${groupId}/users`, {
+async function loadUsers(conversation_id) {
+    const res = await fetch(`/chat/conversations/${conversation_id}/users`, {
         headers: {
             "Authorization": `Bearer ${localStorage.getItem("access")}`
         }
@@ -380,9 +511,11 @@ async function joinGroup() {
     connectWS(currentGroup);
 }
 
-function connectWS(groupId) {
-
-    currentGroup = groupId;   // ✅ IMPORTANT FIX
+function connectWS(conversation_id) {
+    if (ws) {
+        ws.close();
+    }
+    currentGroup = conversation_id;   // ✅ IMPORTANT FIX
     updateHeader();
 
     const token = localStorage.getItem("access");
@@ -392,20 +525,20 @@ function connectWS(groupId) {
     const protocol = location.protocol === "https:" ? "wss" : "ws";
 
     ws = new WebSocket(
-        `${protocol}://${location.host}/ws/${groupId}?token=${token}`
+        `${protocol}://${location.host}/ws/${conversation_id}?token=${token}`
     );
 
     ws.onopen = () => {
         setChatEnabled(true);
-        loadMessages(groupId);
-        loadUsers(groupId); // ✅ also load users here
+        loadMessages(conversation_id);
+        loadUsers(conversation_id); // ✅ also load users here
     };
 
     ws.onmessage = (event) => {
         handleMessage(JSON.parse(event.data));
     };
 
-    history.replaceState(null, "", `/?group=${groupId}`);
+    history.replaceState(null, "", `/?conversation=${conversation_id}`);
 
     ws.onclose = () => {
         setChatEnabled(false);
@@ -429,12 +562,19 @@ function sendMessage() {
 
 // ---------------- UI ----------------
 
-async function loadMessages(groupId) {
+function toggleDmActions() {
+    document
+        .getElementById("dmActions")
+        .classList
+        .toggle("hidden");
+}
+
+async function loadMessages(conversation_id) {
 
     const token = localStorage.getItem("access");
 
     const res = await fetch(
-        `/chat/groups/${groupId}/messages`,
+        `/chat/conversations/${conversation_id}/messages`,
         {
             headers: {
                 "Authorization": `Bearer ${token}`
@@ -510,15 +650,25 @@ function handleMessage(data) {
 
     // Typing indicator
     if (data.type === "typing") {
+    if (data.user === currentUser) return;
 
-        if (data.user === currentUser) return;
+    typingDiv.classList.remove("hidden");
 
-        typingDiv.innerText = `${data.user} is typing...`;
+    typingDiv.innerHTML = `
+        <div class="typing-text">${data.user} is typing</div>
+        <div class="typing-dots">
+            <span></span>
+            <span></span>
+            <span></span>
+        </div>
+    `;
 
-        setTimeout(() => {
-            typingDiv.innerText = "";
-        }, 1000);
-    }
+    clearTimeout(window.typingTimeout);
+
+    window.typingTimeout = setTimeout(() => {
+        typingDiv.classList.add("hidden");
+    }, 1200);
+}
 
     // Online users
     if (data.type === "online_users") {
